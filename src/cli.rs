@@ -15,15 +15,43 @@ pub enum CommandKind {
     Version,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub const DEFAULT_TOKEN_BUDGET: usize = 2000;
+pub const DEFAULT_CHAR_BUDGET: usize = DEFAULT_TOKEN_BUDGET * 4; // 8000
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub max_tokens: Option<usize>,
     pub max_chars: Option<usize>,
+    pub unlimited: bool,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self {
+            max_tokens: Some(DEFAULT_TOKEN_BUDGET),
+            max_chars: None,
+            unlimited: false,
+        }
+    }
 }
 
 impl Budget {
+    pub fn unlimited() -> Self {
+        Self {
+            max_tokens: None,
+            max_chars: None,
+            unlimited: true,
+        }
+    }
+
+    pub fn is_unlimited(&self) -> bool {
+        self.unlimited || (self.max_tokens.is_none() && self.max_chars.is_none())
+    }
+
     pub fn effective_char_limit(&self) -> usize {
-        if let Some(chars) = self.max_chars {
+        if self.is_unlimited() {
+            usize::MAX
+        } else if let Some(chars) = self.max_chars {
             chars
         } else if let Some(tokens) = self.max_tokens {
             tokens.saturating_mul(4)
@@ -32,8 +60,16 @@ impl Budget {
         }
     }
 
-    pub fn is_unlimited(&self) -> bool {
-        self.max_tokens.is_none() && self.max_chars.is_none()
+    pub fn limit_description(&self) -> String {
+        if self.is_unlimited() {
+            "unlimited".to_string()
+        } else if let Some(chars) = self.max_chars {
+            format!("{} chars", chars)
+        } else if let Some(tokens) = self.max_tokens {
+            format!("{} tokens", tokens)
+        } else {
+            format!("{} tokens", DEFAULT_TOKEN_BUDGET)
+        }
     }
 }
 
@@ -45,6 +81,7 @@ pub struct CliArgs {
     pub path: Option<PathBuf>,
     pub budget: Budget,
     pub json: bool,
+    pub raw: bool,
     pub ignore_case: bool,
     pub hidden: bool,
     pub context: usize,
@@ -62,6 +99,7 @@ impl Default for CliArgs {
             path: None,
             budget: Budget::default(),
             json: false,
+            raw: false,
             ignore_case: false,
             hidden: false,
             context: 0,
@@ -182,6 +220,12 @@ where
         if arg.starts_with('-') && !arg.contains('\n') && !arg.starts_with("--- ") && !arg.starts_with("@@ ") {
             if arg == "--json" {
                 cli.json = true;
+            } else if arg == "--raw" {
+                cli.raw = true;
+            } else if arg == "--unlimited" || arg == "--no-budget" {
+                cli.budget.unlimited = true;
+                cli.budget.max_tokens = None;
+                cli.budget.max_chars = None;
             } else if arg == "-i" || arg == "--ignore-case" {
                 cli.ignore_case = true;
             } else if arg == "--hidden" {
@@ -196,13 +240,36 @@ where
                 .or_else(|| arg.strip_prefix("--budget="))
                 .or_else(|| arg.strip_prefix("--tokens="))
                 .or_else(|| arg.strip_prefix("--max-tokens="))
+                .or_else(|| {
+                    if arg.starts_with("-b") && arg.len() > 2 && arg.as_bytes()[2].is_ascii_digit() {
+                        Some(&arg[2..])
+                    } else {
+                        None
+                    }
+                })
             {
                 if let Ok(n) = val.parse::<usize>() {
-                    cli.budget.max_tokens = Some(n);
+                    if n == 0 {
+                        cli.budget.unlimited = true;
+                        cli.budget.max_tokens = None;
+                        cli.budget.max_chars = None;
+                    } else {
+                        cli.budget.unlimited = false;
+                        cli.budget.max_tokens = Some(n);
+                        cli.budget.max_chars = None;
+                    }
                 }
             } else if let Some(val) = arg.strip_prefix("--max-chars=") {
                 if let Ok(n) = val.parse::<usize>() {
-                    cli.budget.max_chars = Some(n);
+                    if n == 0 {
+                        cli.budget.unlimited = true;
+                        cli.budget.max_tokens = None;
+                        cli.budget.max_chars = None;
+                    } else {
+                        cli.budget.unlimited = false;
+                        cli.budget.max_chars = Some(n);
+                        cli.budget.max_tokens = None;
+                    }
                 }
             } else if let Some(val) = arg.strip_prefix("--head=") {
                 if let Ok(n) = val.parse::<usize>() {
@@ -234,7 +301,15 @@ where
                         if i + 1 < args_vec.len() {
                             i += 1;
                             if let Ok(n) = args_vec[i].parse::<usize>() {
-                                cli.budget.max_tokens = Some(n);
+                                if n == 0 {
+                                    cli.budget.unlimited = true;
+                                    cli.budget.max_tokens = None;
+                                    cli.budget.max_chars = None;
+                                } else {
+                                    cli.budget.unlimited = false;
+                                    cli.budget.max_tokens = Some(n);
+                                    cli.budget.max_chars = None;
+                                }
                             }
                         }
                     }
@@ -242,9 +317,25 @@ where
                         if i + 1 < args_vec.len() {
                             i += 1;
                             if let Ok(n) = args_vec[i].parse::<usize>() {
-                                cli.budget.max_chars = Some(n);
+                                if n == 0 {
+                                    cli.budget.unlimited = true;
+                                    cli.budget.max_tokens = None;
+                                    cli.budget.max_chars = None;
+                                } else {
+                                    cli.budget.unlimited = false;
+                                    cli.budget.max_chars = Some(n);
+                                    cli.budget.max_tokens = None;
+                                }
                             }
                         }
+                    }
+                    "--unlimited" | "--no-budget" => {
+                        cli.budget.unlimited = true;
+                        cli.budget.max_tokens = None;
+                        cli.budget.max_chars = None;
+                    }
+                    "--raw" => {
+                        cli.raw = true;
                     }
                     "--head" => {
                         if i + 1 < args_vec.len() {

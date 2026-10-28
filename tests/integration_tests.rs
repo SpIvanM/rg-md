@@ -544,12 +544,12 @@ fn test_budget_token_capping() {
         "--max-chars=40",
     ]);
     assert!(
-        out_search.len() <= 120,
+        out_search.len() <= 200,
         "Search length should be capped: {}",
         out_search.len()
     );
     assert!(
-        out_search.contains("[truncated: budget limit reached]"),
+        out_search.contains("[truncated: budget limit reached (40 chars). Use -b <N> or --unlimited to expand]"),
         "Search output must contain budget marker: {}",
         out_search
     );
@@ -562,12 +562,12 @@ fn test_budget_token_capping() {
         "-b=15",
     ]);
     assert!(
-        out_find.len() <= 150,
+        out_find.len() <= 250,
         "Find length should be capped: {}",
         out_find.len()
     );
     assert!(
-        out_find.contains("[truncated: budget limit reached]"),
+        out_find.contains("[truncated: budget limit reached (15 tokens). Use -b <N> or --unlimited to expand]"),
         "Find output must contain budget marker: {}",
         out_find
     );
@@ -579,12 +579,12 @@ fn test_budget_token_capping() {
         "--max-chars=50",
     ]);
     assert!(
-        out_tree.len() <= 150,
+        out_tree.len() <= 250,
         "Tree length should be capped: {}",
         out_tree.len()
     );
     assert!(
-        out_tree.contains("[truncated: budget limit reached]"),
+        out_tree.contains("[truncated: budget limit reached (50 chars). Use -b <N> or --unlimited to expand]"),
         "Tree output must contain budget marker: {}",
         out_tree
     );
@@ -600,12 +600,12 @@ fn test_budget_token_capping() {
         "-b=20",
     ]);
     assert!(
-        out_pipe.len() <= 200,
+        out_pipe.len() <= 300,
         "Pipe length should be capped: {}",
         out_pipe.len()
     );
     assert!(
-        out_pipe.contains("[truncated: budget limit reached]"),
+        out_pipe.contains("[truncated: budget limit reached (20 tokens). Use -b <N> or --unlimited to expand]"),
         "Pipe output must contain budget marker: {}",
         out_pipe
     );
@@ -629,6 +629,18 @@ fn test_forgiving_cli_argument_parsing() {
     let args1 = parse_args(vec!["search", "foo"]);
     assert_eq!(args1.command, CommandKind::Search);
     assert_eq!(args1.query, "foo");
+    assert_eq!(args1.budget.max_tokens, Some(2000));
+    assert!(!args1.budget.is_unlimited());
+
+    let args_unl = parse_args(vec!["search", "foo", "--unlimited"]);
+    assert!(args_unl.budget.is_unlimited());
+
+    let args_b0 = parse_args(vec!["search", "foo", "-b", "0"]);
+    assert!(args_b0.budget.is_unlimited());
+
+    let args_raw = parse_args(vec!["slice", "main.rs:1-10", "--raw"]);
+    assert_eq!(args_raw.command, CommandKind::Slice);
+    assert!(args_raw.raw);
 
     let args2 = parse_args(vec!["find", "bar"]);
     assert_eq!(args2.command, CommandKind::Find);
@@ -733,4 +745,81 @@ fn test_test_command_execution() {
         "Failed command error details must be captured: {}",
         out_fail
     );
+}
+
+#[test]
+fn test_default_budget_and_unlimited_flag() {
+    let ws = create_temp_workspace("budget_unlimited");
+    let big_file = ws.join("src").join("large_file.rs");
+    let mut content = String::new();
+    for i in 1..=400 {
+        content.push_str(&format!("// Item marker line number {:04} with padding data for testing\n", i));
+    }
+    fs::write(&big_file, &content).unwrap();
+
+    // 1. Default budget (2000 tokens ~ 8000 chars) triggers on large inputs without any flags
+    let out_default = run_from_args(&["Item marker", ws.to_str().unwrap()]);
+    assert!(
+        out_default.contains("[truncated: budget limit reached (2000 tokens). Use -b <N> or --unlimited to expand]"),
+        "Default budget notice must trigger on large input: {}",
+        out_default
+    );
+    assert!(out_default.contains("L1: // Item marker"));
+    assert!(!out_default.contains("L350: // Item marker"), "Should truncate before line 350");
+
+    // 2. --unlimited flag produces full output without truncation
+    let out_unlimited = run_from_args(&["Item marker", ws.to_str().unwrap(), "--unlimited"]);
+    assert!(
+        !out_unlimited.contains("[truncated: budget limit reached"),
+        "Unlimited flag must not truncate: {}",
+        out_unlimited
+    );
+    assert!(out_unlimited.contains("L1: // Item marker"));
+    assert!(out_unlimited.contains("L350: // Item marker"));
+    assert!(out_unlimited.contains("L400: // Item marker"));
+
+    // 3. Aliases for unlimited: --no-budget, -b 0, --max-tokens 0
+    let out_no_budget = run_from_args(&["Item marker", ws.to_str().unwrap(), "--no-budget"]);
+    assert!(!out_no_budget.contains("[truncated: budget limit reached"));
+    assert!(out_no_budget.contains("L400: // Item marker"));
+
+    let out_b0 = run_from_args(&["Item marker", ws.to_str().unwrap(), "-b", "0"]);
+    assert!(!out_b0.contains("[truncated: budget limit reached"));
+    assert!(out_b0.contains("L400: // Item marker"));
+
+    let out_b_inline0 = run_from_args(&["Item marker", ws.to_str().unwrap(), "-b=0"]);
+    assert!(!out_b_inline0.contains("[truncated: budget limit reached"));
+    assert!(out_b_inline0.contains("L400: // Item marker"));
+
+    let out_max_tokens_0 = run_from_args(&["Item marker", ws.to_str().unwrap(), "--max-tokens=0"]);
+    assert!(!out_max_tokens_0.contains("[truncated: budget limit reached"));
+    assert!(out_max_tokens_0.contains("L400: // Item marker"));
+
+    let _ = fs::remove_dir_all(ws);
+}
+
+#[test]
+fn test_slice_raw_clean_code() {
+    let ws = create_temp_workspace("slice_raw");
+    let code_file = ws.join("src").join("clean_code.rs");
+    let original_code = "fn compute() {\n    let val = 42;\n    println!(\"val={}\", val);\n}\n";
+    fs::write(&code_file, original_code).unwrap();
+
+    let target = format!("{}:2-3", code_file.display());
+
+    // 1. slice with --raw prints clean code with original indentation and without markdown list prefixes
+    let out_raw = run_from_args(&["slice", &target, "--raw"]);
+    let expected = "    let val = 42;\n    println!(\"val={}\", val);\n";
+    assert_eq!(
+        out_raw, expected,
+        "slice --raw must output exact clean code lines without - L<num>: prefixes or headings"
+    );
+
+    // 2. Contrast with normal slice (contains headers and - L<num>: prefixes)
+    let out_normal = run_from_args(&["slice", &target]);
+    assert!(out_normal.contains("### `"), "Normal slice must contain header");
+    assert!(out_normal.contains("  - L2: let val = 42;"), "Normal slice must have bullet prefix");
+    assert!(out_normal.contains("  - L3: println!(\"val={}\", val);"), "Normal slice must have bullet prefix");
+
+    let _ = fs::remove_dir_all(ws);
 }

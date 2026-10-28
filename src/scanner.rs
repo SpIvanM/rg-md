@@ -221,7 +221,7 @@ pub fn execute_map(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) ->
     for file in &rel_files {
         let line = format!("  - `{}`\n", file);
         if out.len() + line.len() > limit {
-            out.push_str("  ... [truncated: budget limit reached] ...\n");
+            out.push_str(&crate::formatter::truncation_notice(args.budget));
             break;
         }
         out.push_str(&line);

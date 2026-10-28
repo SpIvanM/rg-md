@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct SliceLine {
     pub line: usize,
     pub content: String,
+    pub raw: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,9 +206,11 @@ pub fn execute_slice(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) 
                 let mut slice_lines = Vec::new();
                 if total > 0 && start_l <= total {
                     for lnum in start_l..=end_l.min(total) {
+                        let raw_line = lines[lnum - 1].to_string();
                         slice_lines.push(SliceLine {
                             line: lnum,
-                            content: lines[lnum - 1].trim().to_string(),
+                            content: raw_line.trim().to_string(),
+                            raw: raw_line,
                         });
                     }
                 }
@@ -240,9 +243,11 @@ pub fn execute_slice(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) 
 
                         let mut slice_lines = Vec::new();
                         for lnum in s..=e {
+                            let raw_line = lines[lnum - 1].to_string();
                             slice_lines.push(SliceLine {
                                 line: lnum,
-                                content: lines[lnum - 1].trim().to_string(),
+                                content: raw_line.trim().to_string(),
+                                raw: raw_line,
                             });
                         }
 

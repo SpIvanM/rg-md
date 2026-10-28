@@ -33,8 +33,10 @@ ALIASES:
 
 FLAGS:
   -p, --dir, --path <path>                Directory or file scope
-  -b, --budget <tokens>                   Token budget (1 token ~ 4 chars; auto-truncates output)
+  -b, --budget <tokens>                   Token budget (default: 2000 tokens / 8000 chars; auto-truncates output)
+      --unlimited                         Disable budget constraints entirely (alias: --no-budget, -b 0)
       --max-chars <chars>                 Character budget override
+      --raw                               Print clean raw code snippet without Markdown list prefixes (slice)
       --head <n>                          Show first n items/lines
       --tail <n>                          Show last n items/lines
   -d, --depth <n>                         Max directory traversal depth (tree)
@@ -46,6 +48,13 @@ FLAGS:
   -V, --version                           Show version
 "#
     .to_string()
+}
+
+pub fn truncation_notice(budget: crate::cli::Budget) -> String {
+    format!(
+        "\n  ... [truncated: budget limit reached ({}). Use -b <N> or --unlimited to expand] ...\n",
+        budget.limit_description()
+    )
 }
 
 pub fn format_search_results(results: &[FileSearchResult], args: &CliArgs) -> String {
@@ -92,7 +101,7 @@ pub fn format_search_results(results: &[FileSearchResult], args: &CliArgs) -> St
     }
 
     if truncated {
-        out.push_str("\n  ... [truncated: budget limit reached] ...\n");
+        out.push_str(&truncation_notice(args.budget));
     }
 
     out
@@ -106,6 +115,46 @@ pub fn format_slice_results(results: &[SliceResult], args: &CliArgs) -> String {
             "results": results,
         });
         return serde_json::to_string_pretty(&val).unwrap_or_default();
+    }
+
+    if args.raw {
+        let mut out = String::new();
+        let limit = args.budget.effective_char_limit();
+        let mut truncated = false;
+
+        for res in results {
+            if res.lines.is_empty() {
+                let msg = format!(
+                    "Target `{}` could not be resolved or file is empty\n",
+                    res.target
+                );
+                if out.len() + msg.len() > limit {
+                    truncated = true;
+                    break;
+                }
+                out.push_str(&msg);
+                continue;
+            }
+
+            for l in &res.lines {
+                let line = format!("{}\n", l.raw);
+                if out.len() + line.len() > limit {
+                    truncated = true;
+                    break;
+                }
+                out.push_str(&line);
+            }
+
+            if truncated {
+                break;
+            }
+        }
+
+        if truncated {
+            out.push_str(&truncation_notice(args.budget));
+        }
+
+        return out;
     }
 
     let mut out = String::new();
@@ -165,7 +214,7 @@ pub fn format_slice_results(results: &[SliceResult], args: &CliArgs) -> String {
     }
 
     if truncated {
-        out.push_str("\n  ... [truncated: budget limit reached] ...\n");
+        out.push_str(&truncation_notice(args.budget));
     }
 
     out
@@ -198,6 +247,6 @@ pub fn truncate_to_budget(text: &str, budget: crate::cli::Budget) -> String {
         out.push('\n');
     }
 
-    out.push_str("\n  ... [truncated: budget limit reached] ...\n");
+    out.push_str(&truncation_notice(budget));
     out
 }
