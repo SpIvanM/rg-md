@@ -13,18 +13,31 @@ pub fn render_help() -> String {
 USAGE:
   rg-md <pattern> [path]                  Fast ripgrep search in markdown list format (default)
   rg-md search <pattern> [path]           Explicit search command
+  rg-md find <glob> [path]                Fast file discovery and path inventory
+  rg-md tree [path]                       Hierarchical directory topology and module scoping
   rg-md slice <target...> [path]          Surgical range/window extractor (e.g. file:10-50, symbol)
-  rg-md map [path]                        Repository file tree & path inventory
+  rg-md diff [file1 file2]                Compact unified diff without raw patch noise
+  rg-md err <command...>                  Execute build/lint command and filter compiler errors
+  rg-md test <command...>                 Execute test suite and isolate failures
+  rg-md pipe [text]                       Filter and format raw piped stdin or text streams
 
 ALIASES:
-  search, find, q                         Search code patterns
-  slice, view, inspect                    Inspect surgical line ranges or symbol definitions
-  map, tree, ls                           List files and structure
+  search, q, query, grep                  Search code patterns
+  find, files                             Find matching files
+  tree, ls, map, overview                 Hierarchical directory structure
+  slice, view, inspect, cat, show, def   Inspect surgical line ranges or symbol definitions
+  diff                                    Unified diff or working tree changes
+  err, errors                             Filter compiler/linter error output
+  test, tests                             Filter test suite failure output
+  pipe                                    Parse and format piped stdin
 
 FLAGS:
-  -p, --dir, --path <path>                Directory or file scope to search
+  -p, --dir, --path <path>                Directory or file scope
   -b, --budget <tokens>                   Token budget (1 token ~ 4 chars; auto-truncates output)
       --max-chars <chars>                 Character budget override
+      --head <n>                          Show first n items/lines
+      --tail <n>                          Show last n items/lines
+  -d, --depth <n>                         Max directory traversal depth (tree)
   -C, --context <lines>                   Context lines before and after match
   -i, --ignore-case                       Case-insensitive search
       --hidden                            Search hidden files
@@ -155,5 +168,36 @@ pub fn format_slice_results(results: &[SliceResult], args: &CliArgs) -> String {
         out.push_str("\n  ... [truncated: budget limit reached] ...\n");
     }
 
+    out
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+pub fn truncate_to_budget(text: &str, budget: crate::cli::Budget) -> String {
+    let limit = budget.effective_char_limit();
+    if text.len() <= limit {
+        return text.to_string();
+    }
+
+    let mut out = String::new();
+    for line in text.lines() {
+        if out.len() + line.len() + 1 > limit {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out.push_str("\n  ... [truncated: budget limit reached] ...\n");
     out
 }

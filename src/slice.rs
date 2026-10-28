@@ -193,6 +193,11 @@ pub fn execute_slice(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) 
                         e.min(total).max(s.min(total.max(1))),
                         None,
                     )
+                } else if let Some(head) = args.head {
+                    (1, head.min(total), None)
+                } else if let Some(tail) = args.tail {
+                    let s = total.saturating_sub(tail.saturating_sub(1)).max(1);
+                    (s, total, None)
                 } else {
                     (1, total, None)
                 };

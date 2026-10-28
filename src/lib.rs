@@ -1,8 +1,13 @@
 pub mod cli;
+pub mod diff;
+pub mod exec;
+pub mod find;
 pub mod formatter;
+pub mod pipe;
 pub mod scanner;
 pub mod search;
 pub mod slice;
+pub mod tree;
 
 use cli::{parse_args, CliArgs, CommandKind};
 use formatter::{render_help, render_version};
@@ -35,6 +40,27 @@ pub fn run_cli(args: &CliArgs) -> String {
             let (repo_root, scope_rel) =
                 discover_root_and_scope(args.path.as_deref(), &args.targets);
             scanner::execute_map(&repo_root, scope_rel.as_deref(), args)
+        }
+        CommandKind::Tree => {
+            let (repo_root, scope_rel) =
+                discover_root_and_scope(args.path.as_deref(), &args.targets);
+            tree::execute_tree(&repo_root, scope_rel.as_deref(), args)
+        }
+        CommandKind::Find => {
+            let (repo_root, scope_rel) =
+                discover_root_and_scope(args.path.as_deref(), &args.targets);
+            find::execute_find(&repo_root, scope_rel.as_deref(), args)
+        }
+        CommandKind::Diff => {
+            let (repo_root, _) =
+                discover_root_and_scope(args.path.as_deref(), &args.targets);
+            diff::execute_diff(&repo_root, args)
+        }
+        CommandKind::Err | CommandKind::Test => {
+            exec::execute_err_or_test(args)
+        }
+        CommandKind::Pipe => {
+            pipe::execute_pipe(args)
         }
     }
 }

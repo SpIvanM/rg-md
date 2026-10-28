@@ -5,6 +5,12 @@ pub enum CommandKind {
     Search,
     Slice,
     Map,
+    Tree,
+    Find,
+    Diff,
+    Err,
+    Test,
+    Pipe,
     Help,
     Version,
 }
@@ -42,6 +48,9 @@ pub struct CliArgs {
     pub ignore_case: bool,
     pub hidden: bool,
     pub context: usize,
+    pub head: Option<usize>,
+    pub tail: Option<usize>,
+    pub depth: Option<usize>,
 }
 
 impl Default for CliArgs {
@@ -56,23 +65,30 @@ impl Default for CliArgs {
             ignore_case: false,
             hidden: false,
             context: 0,
+            head: None,
+            tail: None,
+            depth: None,
         }
     }
 }
 
 pub fn match_subcommand(arg: &str) -> Option<CommandKind> {
     match arg.to_ascii_lowercase().as_str() {
-        "search" | "find" | "q" | "query" | "grep" => Some(CommandKind::Search),
+        "search" | "q" | "query" | "grep" => Some(CommandKind::Search),
         "slice" | "view" | "inspect" | "cat" | "show" | "def" => Some(CommandKind::Slice),
-        "map" | "tree" | "ls" | "files" | "list" | "overview" => Some(CommandKind::Map),
+        "map" | "overview" => Some(CommandKind::Map),
+        "tree" | "ls" => Some(CommandKind::Tree),
+        "find" | "files" => Some(CommandKind::Find),
+        "diff" => Some(CommandKind::Diff),
+        "err" | "errors" => Some(CommandKind::Err),
+        "test" | "tests" => Some(CommandKind::Test),
+        "pipe" => Some(CommandKind::Pipe),
         "help" | "-h" | "--help" => Some(CommandKind::Help),
         "version" | "-v" | "-V" | "--version" => Some(CommandKind::Version),
         _ => None,
     }
 }
 
-/// Translates WSL paths (`/home/...`, `/mnt/c/...`) to Windows UNC/drive paths when running on Windows,
-/// and translates Windows UNC paths (`\\wsl.localhost\Ubuntu\...`) to `/...` when running on Linux.
 pub fn translate_platform_path(raw: &str) -> String {
     let trimmed = raw.trim();
     if cfg!(windows) {
@@ -151,51 +167,56 @@ where
             cli.command = CommandKind::Help;
             return cli;
         }
-        if arg == "-V" || arg == "--version" {
+        if arg == "-v" || arg == "-V" || arg == "--version" {
             cli.command = CommandKind::Version;
             return cli;
         }
 
         if arg.starts_with('-') {
-            if let Some((flag, val)) = arg.split_once('=') {
-                match flag {
-                    "-p" | "--path" | "--dir" | "--repo" => {
-                        cli.path = Some(PathBuf::from(translate_platform_path(val)));
-                    }
-                    "-b" | "--budget" | "--tokens" | "--max-tokens" => {
-                        if let Ok(n) = val.parse::<usize>() {
-                            cli.budget.max_tokens = Some(n);
-                        }
-                    }
-                    "--max-chars" => {
-                        if let Ok(n) = val.parse::<usize>() {
-                            cli.budget.max_chars = Some(n);
-                        }
-                    }
-                    "-C" | "--context" => {
-                        if let Ok(n) = val.parse::<usize>() {
-                            cli.context = n;
-                        }
-                    }
-                    _ => {}
+            if arg == "--json" {
+                cli.json = true;
+            } else if arg == "-i" || arg == "--ignore-case" {
+                cli.ignore_case = true;
+            } else if arg == "--hidden" {
+                cli.hidden = true;
+            } else if let Some(val) = arg.strip_prefix("-p=")
+                .or_else(|| arg.strip_prefix("--path="))
+                .or_else(|| arg.strip_prefix("--dir="))
+                .or_else(|| arg.strip_prefix("--repo="))
+            {
+                cli.path = Some(PathBuf::from(translate_platform_path(val)));
+            } else if let Some(val) = arg.strip_prefix("-b=")
+                .or_else(|| arg.strip_prefix("--budget="))
+                .or_else(|| arg.strip_prefix("--tokens="))
+                .or_else(|| arg.strip_prefix("--max-tokens="))
+            {
+                if let Ok(n) = val.parse::<usize>() {
+                    cli.budget.max_tokens = Some(n);
+                }
+            } else if let Some(val) = arg.strip_prefix("--max-chars=") {
+                if let Ok(n) = val.parse::<usize>() {
+                    cli.budget.max_chars = Some(n);
+                }
+            } else if let Some(val) = arg.strip_prefix("--head=") {
+                if let Ok(n) = val.parse::<usize>() {
+                    cli.head = Some(n);
+                }
+            } else if let Some(val) = arg.strip_prefix("--tail=") {
+                if let Ok(n) = val.parse::<usize>() {
+                    cli.tail = Some(n);
+                }
+            } else if let Some(val) = arg.strip_prefix("-d=").or_else(|| arg.strip_prefix("--depth=")) {
+                if let Ok(n) = val.parse::<usize>() {
+                    cli.depth = Some(n);
+                }
+            } else if let Some(val) = arg.strip_prefix("-C=")
+                .or_else(|| arg.strip_prefix("--context="))
+            {
+                if let Ok(n) = val.parse::<usize>() {
+                    cli.context = n;
                 }
             } else {
                 match arg.as_str() {
-                    "-i" | "--ignore-case" => {
-                        cli.ignore_case = true;
-                    }
-                    "-s" | "--case-sensitive" => {
-                        cli.ignore_case = false;
-                    }
-                    "--hidden" => {
-                        cli.hidden = true;
-                    }
-                    "--json" => {
-                        cli.json = true;
-                    }
-                    "-n" | "--line-number" | "--heading" => {
-                        // Accepted benign compatibility flags
-                    }
                     "-p" | "--path" | "--dir" | "--repo" => {
                         if i + 1 < args_vec.len() {
                             i += 1;
@@ -218,6 +239,30 @@ where
                             }
                         }
                     }
+                    "--head" => {
+                        if i + 1 < args_vec.len() {
+                            i += 1;
+                            if let Ok(n) = args_vec[i].parse::<usize>() {
+                                cli.head = Some(n);
+                            }
+                        }
+                    }
+                    "--tail" => {
+                        if i + 1 < args_vec.len() {
+                            i += 1;
+                            if let Ok(n) = args_vec[i].parse::<usize>() {
+                                cli.tail = Some(n);
+                            }
+                        }
+                    }
+                    "-d" | "--depth" => {
+                        if i + 1 < args_vec.len() {
+                            i += 1;
+                            if let Ok(n) = args_vec[i].parse::<usize>() {
+                                cli.depth = Some(n);
+                            }
+                        }
+                    }
                     "-C" | "--context" => {
                         if i + 1 < args_vec.len() {
                             i += 1;
@@ -235,7 +280,6 @@ where
         i += 1;
     }
 
-    // Determine command from first positional if it matches an alias
     if !positionals.is_empty() {
         if let Some(cmd) = match_subcommand(&positionals[0]) {
             explicit_command = Some(cmd);
@@ -245,19 +289,46 @@ where
 
     cli.command = explicit_command.unwrap_or(CommandKind::Search);
 
-    // Order-independent positional path resolution
     match cli.command {
         CommandKind::Help | CommandKind::Version => {}
-        CommandKind::Map => {
+        CommandKind::Pipe => {
+            if !positionals.is_empty() {
+                cli.query = positionals.join("\n");
+            }
+            cli.targets = positionals;
+        }
+        CommandKind::Err | CommandKind::Test => {
+            if !positionals.is_empty() {
+                cli.query = positionals.join("\n");
+            }
+            cli.targets = positionals;
+        }
+        CommandKind::Diff => {
+            cli.targets = positionals;
+        }
+        CommandKind::Tree | CommandKind::Map => {
             if cli.path.is_none() && !positionals.is_empty() {
                 cli.path = Some(PathBuf::from(translate_platform_path(&positionals[0])));
                 positionals.remove(0);
             }
             cli.targets = positionals;
         }
+        CommandKind::Find => {
+            if cli.path.is_none() && positionals.len() >= 2 {
+                let cand1 = translate_platform_path(&positionals[1]);
+                let p1 = Path::new(&cand1);
+                if p1.is_dir() || cand1.contains('/') || cand1.contains('\\') || cand1 == "." {
+                    cli.path = Some(PathBuf::from(cand1));
+                    cli.query = positionals[0].clone();
+                    positionals = vec![positionals[0].clone()];
+                }
+            } else if !positionals.is_empty() {
+                cli.query = positionals[0].clone();
+            }
+            cli.targets = positionals;
+        }
         CommandKind::Slice => {
             if cli.path.is_none() && positionals.len() >= 2 {
-                // If second positional is an existing directory or looks like a dir, treat as path
                 let candidate = translate_platform_path(&positionals[1]);
                 let p = Path::new(&candidate);
                 if p.is_dir() || candidate.ends_with('/') || candidate.ends_with('\\') {
@@ -279,12 +350,10 @@ where
                     let p1 = Path::new(&cand1);
 
                     if p0.is_dir() && !p1.is_dir() {
-                        // Directory passed first: `rg-md /path "pattern"`
                         cli.path = Some(PathBuf::from(cand0));
                         cli.query = positionals[1].clone();
                         positionals = vec![positionals[1].clone()];
                     } else {
-                        // Pattern passed first: `rg-md "pattern" /path`
                         cli.query = positionals[0].clone();
                         cli.path = Some(PathBuf::from(cand1));
                         positionals = vec![positionals[0].clone()];
