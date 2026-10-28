@@ -147,6 +147,16 @@ pub fn format_git_diff(raw_diff: &str, args: &CliArgs) -> String {
                 let fname = parts[3].trim_start_matches("b/");
                 current_file = Some(fname.to_string());
             }
+        } else if line.starts_with("+++ ") {
+            if current_file.is_none() {
+                let fname = line.trim_start_matches("+++ ").trim_start_matches("b/").trim_start_matches("a/");
+                current_file = Some(fname.to_string());
+            }
+        } else if line.starts_with("--- ") {
+            if current_file.is_none() {
+                let fname = line.trim_start_matches("--- ").trim_start_matches("a/").trim_start_matches("b/");
+                current_file = Some(fname.to_string());
+            }
         } else if line.starts_with("@@ ") {
             // Parse @@ -A,B +C,D @@
             if let Some(plus_idx) = line.find('+') {
@@ -161,11 +171,11 @@ pub fn format_git_diff(raw_diff: &str, args: &CliArgs) -> String {
             }
         } else if line.starts_with('+') && !line.starts_with("+++") {
             added += 1;
-            current_lines.push(format!("  - L{}: + {}", new_line, &line[1..].trim_end()));
+            current_lines.push(format!("  - L{}: + {}", new_line, line[1..].trim()));
             new_line += 1;
         } else if line.starts_with('-') && !line.starts_with("---") {
             removed += 1;
-            current_lines.push(format!("  - L{}: - {}", old_line, &line[1..].trim_end()));
+            current_lines.push(format!("  - L{}: - {}", old_line, line[1..].trim()));
             old_line += 1;
         } else if !line.starts_with("index ")
             && !line.starts_with("---")

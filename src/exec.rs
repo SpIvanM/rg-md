@@ -2,19 +2,32 @@ use crate::cli::CliArgs;
 use crate::formatter::truncate_to_budget;
 use regex::Regex;
 use serde_json::json;
+use std::io::{self, IsTerminal, Read};
 use std::process::Command;
 
 pub fn execute_err_or_test(args: &CliArgs) -> String {
-    let raw_text = if !args.query.is_empty() && (args.query.contains('\n') || args.query.contains("error[") || args.query.contains("FAILED")) {
-        Some(args.query.clone())
-    } else if !args.targets.is_empty() {
-        if args.targets[0].contains('\n') || args.targets[0].contains("error[") || args.targets[0].contains("FAILED") {
-            Some(args.targets.join("\n"))
-        } else if let Ok(content) = std::fs::read_to_string(&args.targets[0]) {
-            Some(content)
+    // Only if stdin/raw piped text is explicitly provided or if targets is empty should it treat input as raw text.
+    let raw_text = if args.targets.is_empty() {
+        if !args.query.is_empty() {
+            Some(args.query.clone())
         } else {
-            None
+            let mut stdin_buf = String::new();
+            if !io::stdin().is_terminal() {
+                let _ = io::stdin().read_to_string(&mut stdin_buf);
+            }
+            if !stdin_buf.trim().is_empty() {
+                Some(stdin_buf)
+            } else {
+                None
+            }
         }
+    } else if args.targets.len() == 1
+        && (args.targets[0].contains('\n')
+            || args.targets[0].contains("error[")
+            || args.targets[0].starts_with("error:")
+            || args.targets[0].contains("FAILED"))
+    {
+        Some(args.targets[0].clone())
     } else {
         None
     };
@@ -52,7 +65,8 @@ pub fn filter_compiler_or_test_output(raw: &str, status_code: i32, args: &CliArg
     let mut errors: Vec<String> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
 
-    let re_cargo_err = Regex::new(r"error(\[[^\]]+\])?: (.*)").unwrap();
+    let re_ansi = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap();
+    let re_cargo_err = Regex::new(r"^error(\[[^\]]+\])?: (.*)").unwrap();
     let re_tsc_err = Regex::new(r"^(.*?):(\d+):(\d+) - error (TS\d+): (.*)").unwrap();
     let re_test_fail = Regex::new(r"(FAILED|test [^\s]+ \.\.\. FAILED|FAIL [^\s]+)").unwrap();
 
@@ -60,7 +74,8 @@ pub fn filter_compiler_or_test_output(raw: &str, status_code: i32, args: &CliArg
     let mut block_lines: Vec<String> = Vec::new();
 
     for line in raw.lines() {
-        let trimmed = line.trim();
+        let clean_line = re_ansi.replace_all(line, "");
+        let trimmed = clean_line.trim();
         if trimmed.is_empty() {
             if in_failure_block && !block_lines.is_empty() {
                 failures.push(block_lines.join("\n"));
@@ -73,7 +88,18 @@ pub fn filter_compiler_or_test_output(raw: &str, status_code: i32, args: &CliArg
         if let Some(caps) = re_cargo_err.captures(trimmed) {
             let code = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let msg = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            errors.push(format!("### Error {} \n  - {}", code, msg));
+            if msg.starts_with("aborting due to") {
+                continue;
+            }
+            if msg.starts_with("could not compile") && !errors.is_empty() {
+                continue;
+            }
+            let header = if code.is_empty() {
+                "### Error".to_string()
+            } else {
+                format!("### Error {}", code)
+            };
+            errors.push(format!("{}\n  - {}", header, msg));
         } else if let Some(caps) = re_tsc_err.captures(trimmed) {
             let file = &caps[1];
             let l = &caps[2];
@@ -125,8 +151,11 @@ pub fn filter_compiler_or_test_output(raw: &str, status_code: i32, args: &CliArg
         }
     }
 
-    for err in errors {
-        out.push_str(&err);
+    for (i, err) in errors.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(err);
         out.push('\n');
     }
 

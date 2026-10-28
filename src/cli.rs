@@ -167,12 +167,19 @@ where
             cli.command = CommandKind::Help;
             return cli;
         }
-        if arg == "-v" || arg == "-V" || arg == "--version" {
+        if (arg == "-v" || arg == "-V" || arg == "--version") && explicit_command.is_none() {
             cli.command = CommandKind::Version;
             return cli;
         }
 
-        if arg.starts_with('-') {
+        if arg == "--" {
+            for rem in &args_vec[i + 1..] {
+                positionals.push(rem.clone());
+            }
+            break;
+        }
+
+        if arg.starts_with('-') && !arg.contains('\n') && !arg.starts_with("--- ") && !arg.starts_with("@@ ") {
             if arg == "--json" {
                 cli.json = true;
             } else if arg == "-i" || arg == "--ignore-case" {
@@ -271,16 +278,27 @@ where
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+                        if explicit_command == Some(CommandKind::Err) || explicit_command == Some(CommandKind::Test) {
+                            positionals.push(arg.clone());
+                        }
+                    }
                 }
             }
         } else {
+            if explicit_command.is_none() && positionals.is_empty() {
+                if let Some(cmd) = match_subcommand(arg) {
+                    explicit_command = Some(cmd);
+                    i += 1;
+                    continue;
+                }
+            }
             positionals.push(arg.clone());
         }
         i += 1;
     }
 
-    if !positionals.is_empty() {
+    if explicit_command.is_none() && !positionals.is_empty() {
         if let Some(cmd) = match_subcommand(&positionals[0]) {
             explicit_command = Some(cmd);
             positionals.remove(0);
@@ -299,7 +317,7 @@ where
         }
         CommandKind::Err | CommandKind::Test => {
             if !positionals.is_empty() {
-                cli.query = positionals.join("\n");
+                cli.query = positionals.join(" ");
             }
             cli.targets = positionals;
         }

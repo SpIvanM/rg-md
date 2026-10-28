@@ -258,7 +258,7 @@ fn test_diff_formatting() {
  fn stop_recording() {
 -    recorder.abort();
 +    recorder.flush();
-     recorder.stop();
++    recorder.stop();
  }
 "#;
 
@@ -618,4 +618,54 @@ fn test_root_discovery_and_scoping() {
     assert_eq!(scope_rel, Some("src/components/deep".to_string()));
 
     let _ = fs::remove_dir_all(&root_dir);
+}
+
+#[test]
+fn test_err_command_execution() {
+    let out = run_from_args(&["err", "rustc", "/tmp/nonexistent_test_file_rg_md.rs"]);
+
+    assert!(
+        out.contains("### Error"),
+        "Must contain structured Error header: {}",
+        out
+    );
+    assert!(
+        out.contains("couldn't read") && out.contains("nonexistent_test_file_rg_md.rs"),
+        "Must capture actual compiler error details from stderr: {}",
+        out
+    );
+    assert!(
+        !out.contains("Command Failed with exit code"),
+        "Must not fall back to generic command failed when error is parsed: {}",
+        out
+    );
+    assert!(
+        !out.contains("aborting due to"),
+        "Must filter out rustc aborting summary boilerplate: {}",
+        out
+    );
+}
+
+#[test]
+fn test_test_command_execution() {
+    // 1. Successful command execution
+    let out_success = run_from_args(&["test", "rustc", "--version"]);
+    assert!(
+        out_success.contains("### Command Succeeded (0 errors, 0 failures)"),
+        "Successful command must report Command Succeeded: {}",
+        out_success
+    );
+
+    // 2. Failed command execution with error
+    let out_fail = run_from_args(&["test", "rustc", "--invalid-flag-rg-md-test"]);
+    assert!(
+        out_fail.contains("### Error"),
+        "Failed command must report Error: {}",
+        out_fail
+    );
+    assert!(
+        out_fail.contains("Unrecognized option"),
+        "Failed command error details must be captured: {}",
+        out_fail
+    );
 }
