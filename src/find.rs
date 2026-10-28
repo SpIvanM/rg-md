@@ -44,6 +44,24 @@ pub fn glob_to_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
         .build()
 }
 
+fn strip_relative(path: &Path, base: &Path) -> String {
+    let rel_buf = if let Ok(r) = path.strip_prefix(base) {
+        r.to_string_lossy().replace('\\', "/")
+    } else if let (Ok(c_path), Ok(c_base)) = (path.canonicalize(), base.canonicalize()) {
+        if let Ok(r) = c_path.strip_prefix(&c_base) {
+            r.to_string_lossy().replace('\\', "/")
+        } else {
+            path.to_string_lossy().replace('\\', "/")
+        }
+    } else {
+        path.to_string_lossy().replace('\\', "/")
+    };
+    rel_buf
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string()
+}
+
 pub fn execute_find(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) -> String {
     let glob_pat = if !args.query.is_empty() {
         &args.query
@@ -77,13 +95,34 @@ pub fn execute_find(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) -
         repo_root.to_path_buf()
     };
 
+    let is_sub_scan = match (scan_dir.canonicalize(), repo_root.canonicalize()) {
+        (Ok(c_scan), Ok(c_root)) => c_scan != c_root,
+        _ => {
+            if let Ok(rel) = scan_dir.strip_prefix(repo_root) {
+                let s = rel.to_string_lossy().replace('\\', "/");
+                let trimmed = s.trim_matches('/');
+                !trimmed.is_empty() && trimmed != "."
+            } else {
+                scan_dir != repo_root
+            }
+        }
+    };
+
+    let base_dir = if is_sub_scan {
+        &scan_dir
+    } else {
+        repo_root
+    };
+
     let all_files = collect_files(&scan_dir, args.hidden);
     let mut matched_items: Vec<FindFileItem> = Vec::new();
 
     for abs_path in all_files {
-        let rel = match abs_path.strip_prefix(repo_root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => abs_path.to_string_lossy().replace('\\', "/"),
+        let rel_from_repo = strip_relative(&abs_path, repo_root);
+        let rel_from_base = if is_sub_scan {
+            strip_relative(&abs_path, base_dir)
+        } else {
+            rel_from_repo.clone()
         };
 
         let file_name = abs_path
@@ -91,10 +130,13 @@ pub fn execute_find(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) -
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        if matcher.is_match(&file_name) || matcher.is_match(&rel) {
+        if matcher.is_match(&file_name)
+            || matcher.is_match(&rel_from_base)
+            || matcher.is_match(&rel_from_repo)
+        {
             let size = fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
             matched_items.push(FindFileItem {
-                path: rel,
+                path: rel_from_base,
                 size_bytes: size,
             });
         }
@@ -112,16 +154,23 @@ pub fn execute_find(repo_root: &Path, scope_rel: Option<&str>, args: &CliArgs) -
         return truncate_to_budget(&res.to_string(), args.budget);
     }
 
-    let scope_display = scope_rel.unwrap_or_else(|| {
-        if scan_dir == repo_root {
-            "."
-        } else {
-            scan_dir
-                .strip_prefix(repo_root)
-                .map(|p| p.to_str().unwrap_or("."))
-                .unwrap_or(".")
-        }
-    });
+    let scope_display = scope_rel
+        .map(|s| s.trim_end_matches('/').to_string())
+        .unwrap_or_else(|| {
+            if !is_sub_scan {
+                ".".to_string()
+            } else {
+                scan_dir
+                    .strip_prefix(repo_root)
+                    .map(|p| {
+                        p.to_string_lossy()
+                            .replace('\\', "/")
+                            .trim_end_matches('/')
+                            .to_string()
+                    })
+                    .unwrap_or_else(|_| ".".to_string())
+            }
+        });
 
     let mut out = String::new();
     out.push_str(&format!(

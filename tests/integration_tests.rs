@@ -141,7 +141,20 @@ fn test_find_file_discovery() {
         out_rs
     );
 
-    // 2. Find TypeScript files (*.tsx)
+    // 2. Find TypeScript files (*.tsx) in repo root
+    let icons_dir = comp_dir.join("icons");
+    fs::create_dir_all(&icons_dir).unwrap();
+    fs::write(
+        icons_dir.join("mic.svg"),
+        "<svg>mic</svg>\n",
+    )
+    .unwrap();
+    fs::write(
+        comp_dir.join("main.tsx"),
+        "import React from 'react';\n",
+    )
+    .unwrap();
+
     let out_tsx = run_from_args(&["find", "*.tsx", ws.to_str().unwrap()]);
     assert!(
         out_tsx.contains("### find \"*.tsx\""),
@@ -149,8 +162,13 @@ fn test_find_file_discovery() {
         out_tsx
     );
     assert!(
-        out_tsx.contains("RecordingOverlay.tsx"),
-        "Must discover tsx file: {}",
+        out_tsx.contains("src/components/RecordingOverlay.tsx"),
+        "Must discover tsx file with full relative path from repo root: {}",
+        out_tsx
+    );
+    assert!(
+        out_tsx.contains("src/components/main.tsx"),
+        "Must discover main.tsx with full relative path from repo root: {}",
         out_tsx
     );
     assert!(
@@ -162,6 +180,53 @@ fn test_find_file_discovery() {
         out_tsx.contains(" B)") || out_tsx.contains(" KB)"),
         "Must include formatted byte size: {}",
         out_tsx
+    );
+
+    // 3. Find in subdirectory (relative to subdirectory, no redundant prefix)
+    let comp_path_str = comp_dir.to_str().unwrap();
+    let out_sub = run_from_args(&["find", "*.tsx", comp_path_str]);
+    assert!(
+        out_sub.contains("### find \"*.tsx\" (2 matches in `src/components`)"),
+        "Header must show scope src/components: {}",
+        out_sub
+    );
+    assert!(
+        out_sub.contains("- `RecordingOverlay.tsx`"),
+        "Must format relative to scan_dir without prefix: {}",
+        out_sub
+    );
+    assert!(
+        out_sub.contains("- `main.tsx`"),
+        "Must format relative to scan_dir without prefix: {}",
+        out_sub
+    );
+    assert!(
+        !out_sub.contains("src/components/RecordingOverlay.tsx"),
+        "Must NOT repeat subdirectory prefix on matched items: {}",
+        out_sub
+    );
+    assert!(
+        !out_sub.contains("src/components/main.tsx"),
+        "Must NOT repeat subdirectory prefix on matched items: {}",
+        out_sub
+    );
+
+    // 4. Nested subdirectory under scan_dir (e.g. icons/mic.svg relative to src/components)
+    let out_sub_nested = run_from_args(&["find", "*.svg", comp_path_str]);
+    assert!(
+        out_sub_nested.contains("### find \"*.svg\" (1 matches in `src/components`)"),
+        "Header must show scope src/components: {}",
+        out_sub_nested
+    );
+    assert!(
+        out_sub_nested.contains("- `icons/mic.svg`"),
+        "Nested subdirectory item must be formatted relative to scan_dir: {}",
+        out_sub_nested
+    );
+    assert!(
+        !out_sub_nested.contains("src/components/icons/mic.svg"),
+        "Must NOT repeat scan_dir prefix for nested items: {}",
+        out_sub_nested
     );
 
     let _ = fs::remove_dir_all(ws);
